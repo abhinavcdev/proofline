@@ -12,6 +12,7 @@ import {
   validateAnswers,
   type Answers,
   type DecisionProvider,
+  TYPESAFE_WIRE,
   type JevWire,
 } from "../src/index.js";
 import { agentEdge, headlessBrowser, humanBrowser, humanEdge, humanServer, okChecks, swarmEdge } from "./fixtures.js";
@@ -149,12 +150,83 @@ describe("decideWithFallback", () => {
 describe("JevProvider", () => {
   const API_KEY = "tsk_live_do_not_log_me_0123456789";
 
-  it("without the documented wire schema, fails fast and degrades to rules", async () => {
-    const fetchSpy = vi.fn();
-    const jev = new JevProvider({ apiKey: API_KEY, baseUrl: "https://api.example", fetch: fetchSpy });
+  // Shaped like the documented examples (docs.typesafe.ai/api).
+  const jevResponse = {
+    model: "jev-1.13.0",
+    answers: {
+      is_automated: { type: "noul", noul: 0.04 },
+      actor_type: {
+        type: "choice",
+        choice: "human",
+        probabilities: { human: 0.93, declared_agent: 0.01, scraper: 0.01, spam_bot: 0.01, credential_stuffer: 0.02, farm_account: 0.02 },
+        confidence: 0.91,
+      },
+      risk_level: {
+        type: "score",
+        score: 0.12,
+        legend: { "0": "safe", "1": "low", "2": "elevated", "3": "high" },
+        probabilities: { "0": 0.9, "1": 0.08, "2": 0.02, "3": 0.0 },
+        confidence: 0.88,
+      },
+      intent: {
+        type: "choice",
+        choice: "normal_use",
+        probabilities: { normal_use: 0.95, data_harvesting: 0.01, fraud: 0.02, spam: 0.01, account_takeover: 0.01 },
+        confidence: 0.93,
+      },
+    },
+    usage: { input_tokens: 612, output_tokens: 40 },
+  };
+
+  it("builds the documented System One request from the question set", async () => {
+    const fetchSpy = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify(jevResponse)));
+    const jev = new JevProvider({ apiKey: API_KEY, fetch: fetchSpy as unknown as typeof fetch });
     const r = await decideWithFallback(jev, new RulesOnlyProvider(), human, set, { timeoutMs: 400 });
-    expect(r).toMatchObject({ source: "fallback", fallback_reason: "error" });
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(r.source).toBe("jev");
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://api.typesafe.ai/v1/systemone");
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${API_KEY}`);
+    const body = JSON.parse(String(init.body));
+    expect(body.model).toBe("jev-latest");
+    expect(body.state).toEqual(human);
+    expect(Object.keys(body.questions)).toEqual(askedQuestionKeys(human, set));
+    expect(body.questions.is_automated).toMatchObject({ type: "noul", criteria: { true: expect.any(String), false: expect.any(String) } });
+    expect(Object.keys(body.questions.actor_type.criteria)).toContain("credential_stuffer");
+    expect(body.questions.risk_level.criteria).toHaveLength(4);
+    expect(body.questions.risk_level.criteria[3]).toMatch(/^high: /);
+  });
+
+  it("maps the documented response into internal answers", () => {
+    const keys = askedQuestionKeys(human, set);
+    const a = TYPESAFE_WIRE.parseResponse(jevResponse, set, keys);
+    expect(a.is_automated).toEqual({ type: "noul", p: 0.04, confidence: 0.92, confidence_derived: true });
+    expect(a.actor_type).toMatchObject({ type: "choice", label: "human", confidence: 0.91 });
+    expect(a.risk_level).toEqual({ type: "score", value: 0, probs: [0.9, 0.08, 0.02, 0], confidence: 0.88 });
+    expect(() => validateAnswers(a, set, keys)).not.toThrow();
+  });
+
+  it("uses a pinned model when configured", async () => {
+    const fetchSpy = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify(jevResponse)));
+    const jev = new JevProvider({ apiKey: API_KEY, model: "jev-1.13.0", fetch: fetchSpy as unknown as typeof fetch });
+    await jev.decide(human, set, askedQuestionKeys(human, set), { signal: signal() });
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]![1].body)).model).toBe("jev-1.13.0");
+  });
+
+  it("falls back on malformed or mismatched responses", async () => {
+    for (const bad of [{ nope: true }, { ...jevResponse, answers: { ...jevResponse.answers, is_automated: { type: "choice", choice: "x", probabilities: {}, confidence: 1 } } }]) {
+      const fetchSpy = vi.fn(async () => new Response(JSON.stringify(bad)));
+      const jev = new JevProvider({ apiKey: API_KEY, fetch: fetchSpy as unknown as typeof fetch });
+      const r = await decideWithFallback(jev, new RulesOnlyProvider(), human, set, { timeoutMs: 400 });
+      expect(r).toMatchObject({ source: "fallback", fallback_reason: "invalid_response" });
+    }
+  });
+
+  it("falls back when an asked answer is missing", async () => {
+    const { intent: _drop, ...rest } = jevResponse.answers;
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ ...jevResponse, answers: rest })));
+    const jev = new JevProvider({ apiKey: API_KEY, fetch: fetchSpy as unknown as typeof fetch });
+    const r = await decideWithFallback(jev, new RulesOnlyProvider(), human, set, { timeoutMs: 400 });
+    expect(r).toMatchObject({ source: "fallback", fallback_reason: "invalid_response" });
   });
 
   // A stand-in wire adapter to exercise transport behaviour. NOT the real Jev schema.
