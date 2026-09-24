@@ -1,0 +1,20 @@
+name = "proofline-api"
+main = "src/worker/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Secrets (wrangler secret put): TOKEN_SIGNING_SECRET, IP_SALT_SECRET, TYPESAFE_API_KEY
+# Optional: TOKEN_SIGNING_SECRET_PREVIOUS, TRUSTED_AGENTS, BAD_IP_CIDRS, DECISION_PROVIDER, JEV_MODEL
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "replace-with-your-hyperdrive-id"
+localConnectionString = "postgres://proofline:proofline@localhost:5432/proofline"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiterDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiterDO"]
