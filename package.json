@@ -11,7 +11,8 @@
     "typecheck": "turbo run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "check": "pnpm lint && turbo run typecheck test"
+    "check": "pnpm lint && turbo run typecheck test",
+    "e2e": "turbo run e2e"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",

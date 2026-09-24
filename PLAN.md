@@ -1,6 +1,6 @@
 # Proofline: MVP Plan
 
-> Status: **Approved. M1 complete** (JevProvider wire schema pending Q1).
+> Status: **Approved. M1 and M2 complete.**
 > Last updated: 2026-09-24
 
 Proofline answers one question for every sensitive event: **is this a human, a legitimate agent, or a bad bot?** It then applies the lightest check that settles the question.
@@ -11,8 +11,8 @@ Proofline answers one question for every sensitive event: **is this a human, a l
 
 | # | Topic | Status |
 |---|-------|--------|
-| Q1 | **Jev wire schema.** `docs.typesafe.ai` is still blocked by this environment's network policy. | **Open.** `JevProvider` is complete apart from its `JevWire` adapter. `PENDING_JEV_WIRE` fails fast without calling out, so every decision degrades to rules and is recorded as `decision_source: "fallback"`. To unblock: allow `docs.typesafe.ai` and the Jev API host in the environment's network settings (a new session may be needed for the change to take effect), or paste the API reference into `docs/vendor/typesafe-jev.md`. |
-| Q2 | `noul` confidence | **Open (depends on Q1).** Internal `NoulAnswer` has `confidence` + `confidence_derived`. If Jev returns none, the wire adapter sets `confidence = |2p − 1|` and `confidence_derived: true`. |
+| Q1 | **Jev wire schema** | **Resolved.** Implemented from the TypeSafe API reference as `TYPESAFE_WIRE`: `POST https://api.typesafe.ai/v1/systemone` with bearer auth and `{ model, state, questions }`. Summary in `docs/vendor/typesafe-jev.md`. `JEV_MODEL` selects the model (default `jev-latest`). |
+| Q2 | `noul` confidence | **Resolved.** Jev returns no confidence for nouls, so the adapter derives `confidence = |2p − 1|` and sets `confidence_derived: true`. Choice and score answers use Jev's own confidence. |
 | Q3 | Signal-token signing | **Decided:** new `POST /v1/signals` (publishable key) returns an HMAC-signed, 5-minute, one-time token. |
 | Q4 | Postgres for Workers | **Decided:** Hyperdrive in front of Postgres (for example Neon) for deploys, Docker Postgres locally, PGlite for tests. |
 | Q5 | Latency (400 ms Jev cap vs 300 ms p95) | **Decided:** keep the 400 ms cap and measure in M5. Hard-blocked events skip the Jev call entirely. |
@@ -182,7 +182,8 @@ interface DecisionProvider {
 ### 3.9 API (`apps/api`)
 | Route | Key scope | Notes |
 |---|---|---|
-| `POST /v1/signals` | publishable | origin allowlist, returns signal token |
+| `POST /v1/signals` | publishable | origin allowlist, returns signal token; `text/plain` JSON body with `key`, so no CORS preflight |
+| `POST /v1/pow` | publishable | PoW challenge when the project has `pow_bits` set |
 | `POST /v1/assess` | secret | main pipeline |
 | `POST /v1/challenge/start` / `complete` | publishable | browser-facing; bound to `decision_id` |
 | `POST /v1/feedback` | secret | training labels |
@@ -219,7 +220,7 @@ interface DecisionProvider {
 - [x] `packages/core/types`: Zod schemas for signals, state, answers, actions, policy
 - [x] `packages/questions/v1.ts` + schema + registry
 - [x] `DecisionProvider` + `MockProvider` + `RulesOnlyProvider` + `decideWithFallback` (400 ms, aborts the request)
-- [ ] `JevProvider`: transport, auth and error handling done; **`JevWire` adapter blocked on Q1** (degrades to rules until then)
+- [x] `JevProvider` with the documented `TYPESAFE_WIRE` adapter (resolved Q1 in M2)
 - [x] State builder with bucketing, truncation, PII redaction, 600-token guard
 - [x] Policy engine, default per-event policies, `applyMode`, reasons
 - [x] Token sign/verify (with key rotation and replay guard), PoW primitives, log redaction
@@ -231,13 +232,24 @@ interface DecisionProvider {
 - The fallback never blocks on heuristics alone: `RulesOnlyProvider` caps confidence at 0.6, so the confidence-gated rules can't fire. Hard checks still block.
 - The mock and rules-only providers share one feature extractor (`core/src/features.ts`). The policy engine uses the same features to write its reasons.
 
-### M2: Signals
-- [ ] `sdk-browser` collectors, PoW worker, consent, token fetch, size budget check
-- [ ] `packages/edge` network signals, hashing, header checks, agent detection, rate counters, modes
-- [ ] `packages/db` schema + migrations + `EventStore` (Postgres / PGlite / memory)
-- [ ] `apps/api`: `/v1/signals`, `/v1/assess`, `/v1/feedback`, API keys + scopes, rate limit, stage timings
-- [ ] `sdk-server`: `assess()`, `feedback()`, fail-open
-- [ ] `apps/demo-site` wired up in **shadow mode**, plus the shadow-never-blocks test
+### M2: Signals ✅
+- [x] `sdk-browser` collectors, PoW worker, consent, token fetch, size budget check (4.1 KB gzip; the build fails over 15 KB)
+- [x] `packages/edge` network signals, hashing, header checks, agent detection (Web Bot Auth), rate counters, modes
+- [x] `packages/db` schema + migrations + `Store` (Postgres / PGlite / memory, one contract test for all)
+- [x] `apps/api`: `/v1/signals`, `/v1/pow`, `/v1/assess`, `/v1/feedback`, API keys + scopes, rate limit, stage timings; Workers entry (Hyperdrive + Durable Object) and Node entry
+- [x] `sdk-server`: `assess()`, `feedback()`, fail-open
+- [x] `apps/demo-site` wired up in **shadow mode**, plus the shadow-never-blocks tests (bot corpus in Vitest, real Chromium in Playwright)
+- [x] 192 unit and integration tests plus 3 Playwright E2E tests; `pnpm lint && pnpm turbo run typecheck test` green, `pnpm e2e` green
+
+**M2 notes**
+- **Signal token contents.** The token carries the browser and edge signals, so `/v1/assess` needs no lookup. It's signed, not encrypted, so the end user can read it. It contains aggregates, the daily IP hash, ASN and header fingerprint, but never a raw IP.
+- **`/v1/assess` accepts optional `client: { ip, user_agent, accept_language }`.** When there's no valid token (for example curl posting straight to the form), network signals come from these. The IP is hashed immediately. `sdk-server` has `clientFromHeaders()`, which trusts forwarding headers only with `trustProxy`.
+- **Tokens are one-time.** A second `/v1/assess` with the same token is a hard block (`replayed`). `sdk-server` never retries `assess()`, for this reason.
+- **Header order.** The Fetch `Headers` object sorts header names (Workers, undici), so the fingerprint uses header order only when an adapter supplies raw names (the Node entry does). `unusual_header_order` is not emitted yet.
+- **ASN classes** come from a short list of known networks plus AS-organisation keywords. Anything else is `unknown`; we never assume `residential`.
+- **Verified agents** (Web Bot Auth against the `TRUSTED_AGENTS` allowlist, or Cloudflare `verifiedBot`) get separate rate-limit counters. Agent-looking user agents and failed signatures count as `unverified_claim`.
+- **Enforce mode and spam.** `shadow_drop` looks like success to the sender, but the demo site discards the submission. The enforce-mode corpus test checks this.
+- The Worker bundles with `wrangler deploy --dry-run` (229 KB gzip). It hasn't been deployed: that needs a Cloudflare account, a Hyperdrive id and secrets.
 
 ### M3: Step-up
 - [ ] `/v1/challenge/start|complete`, challenges state machine, pass tokens, `verifyToken()`

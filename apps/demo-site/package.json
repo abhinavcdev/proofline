@@ -1,0 +1,27 @@
+{
+  "name": "@proofline/demo-site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@proofline/sdk-server": "workspace:*",
+    "hono": "^4.13.9"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@proofline/api": "workspace:*",
+    "@proofline/config": "workspace:*",
+    "@proofline/core": "workspace:*",
+    "@proofline/db": "workspace:*",
+    "@proofline/edge": "workspace:*",
+    "@proofline/sdk-browser": "workspace:*",
+    "esbuild": "^0.28.2"
+  }
+}
