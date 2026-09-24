@@ -192,8 +192,11 @@ describe("the same corpus in enforce mode", () => {
       // Looks like success to the sender, but the site doesn't act on it.
       expect(last.status).toBe(200);
       expect(s.demo.submissions.some((x) => x.decision.decision_id === decision!.id)).toBe(false);
+    } else if (decision!.effective_action.startsWith("step_up:")) {
+      expect(last.status).toBe(303);
+      expect(last.headers.get("location")).toMatch(/^\/verify\?c=ch_/);
     } else {
-      expect([202, 403]).toContain(last.status);
+      expect(last.status).toBe(403);
     }
   });
 

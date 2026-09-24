@@ -7,7 +7,7 @@ export interface PageOpts {
   apiUrl: string;
 }
 
-function layout(title: string, body: string, opts: PageOpts) {
+function layout(title: string, body: string, opts: PageOpts, scripts?: string) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -25,12 +25,19 @@ function layout(title: string, body: string, opts: PageOpts) {
   button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   .note { font-size: .875rem; opacity: .8; }
   .decision { margin-top: 2rem; padding: .75rem; border: 1px dashed currentColor; font-size: .875rem; }
+  .proofline-challenge h2 { margin-top: 1.5rem; }
+  .proofline-challenge progress { width: 100%; }
+  .proofline-actions { display: flex; gap: .75rem; flex-wrap: wrap; }
+  .proofline-button { margin-top: 1.25rem; padding: .6rem 1.2rem; font: inherit; border-radius: 6px; cursor: pointer; }
+  .proofline-primary { background: var(--accent); color: #fff; border: 0; }
+  .proofline-secondary { background: transparent; color: inherit; border: 1px solid currentColor; }
+  button:disabled { opacity: .6; cursor: not-allowed; }
 </style>
-<script async src="/proofline.js" data-key="${esc(opts.publishableKey)}" data-api="${esc(opts.apiUrl)}"></script>
+${scripts ?? `<script async src="/proofline.js" data-key="${esc(opts.publishableKey)}" data-api="${esc(opts.apiUrl)}"></script>`}
 </head>
 <body>
 <header><a href="/">🥐 Crumb &amp; Co. Bakery</a></header>
-<nav aria-label="Main"><a href="/signup">Sign up</a><a href="/contact">Contact</a><a href="/checkout">Order</a></nav>
+<nav aria-label="Main"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="/contact">Contact</a><a href="/checkout">Order</a></nav>
 <main>
 ${body}
 </main>
@@ -52,6 +59,29 @@ export const signup = (o: PageOpts) =>
   <button type="submit">Create account</button>
 </form>`,
     o,
+  );
+
+export const login = (o: PageOpts) =>
+  layout(
+    "Log in",
+    `<h1>Welcome back</h1>
+<form method="post" action="/login" data-proofline-event="login">
+  <label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required>
+  <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Log in</button>
+</form>`,
+    o,
+  );
+
+export const challenge = (o: PageOpts, challengeId: string) =>
+  layout(
+    "Quick check",
+    `<h1>Just checking it's you</h1>
+<p>To keep accounts safe, we sometimes ask for one extra step.</p>
+<div data-proofline-challenge="${esc(challengeId)}" data-key="${esc(o.publishableKey)}" data-api="${esc(o.apiUrl)}" data-complete-url="/verify/complete"></div>
+<noscript><p>This check needs JavaScript. Please email hello@crumb.example and we'll help you finish.</p></noscript>`,
+    o,
+    `<script async src="/proofline-challenge.js"></script>`,
   );
 
 export const contact = (o: PageOpts) =>

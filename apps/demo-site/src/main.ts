@@ -3,7 +3,8 @@ import type { AddressInfo } from "node:net";
 import type { Store } from "@proofline/db";
 import { createProofline } from "@proofline/sdk-server";
 import { createDemoApp } from "./app.js";
-import { sdkBundle } from "./sdk.js";
+import { challengeBundle, sdkBundle } from "./sdk.js";
+import type { ApiDeps } from "@proofline/api";
 
 /**
  * Local demo. With no configuration it starts a Proofline API in-process
@@ -12,7 +13,9 @@ import { sdkBundle } from "./sdk.js";
  * PROOFLINE_API_URL, PROOFLINE_SECRET_KEY and PROOFLINE_PUBLISHABLE_KEY.
  */
 
-export async function startDemo(opts: { port?: number; apiPort?: number; mode?: "shadow" | "enforce" } = {}) {
+export async function startDemo(
+  opts: { port?: number; apiPort?: number; mode?: "shadow" | "enforce"; apiDeps?: Partial<ApiDeps> } = {},
+) {
   const port = opts.port ?? Number(process.env.PORT ?? 3000);
   let apiUrl = process.env.PROOFLINE_API_URL;
   let secretKey = process.env.PROOFLINE_SECRET_KEY;
@@ -30,8 +33,9 @@ export async function startDemo(opts: { port?: number; apiPort?: number; mode?: 
 
   if (!apiUrl || !secretKey || !publishableKey) {
     const { startLocalApi } = await import("@proofline/api/local");
-    const api = await startLocalApi({ port: opts.apiPort ?? Number(process.env.API_PORT ?? 8787) });
-    const project = await api.store.createProject({ name: "Crumb & Co. Bakery", allowed_origins: [origin], mode: opts.mode ?? "shadow" });
+    const api = await startLocalApi({ port: opts.apiPort ?? Number(process.env.API_PORT ?? 8787), ...(opts.apiDeps ? { deps: opts.apiDeps } : {}) });
+    const mode = opts.mode ?? (process.env.DEMO_MODE === "enforce" ? "enforce" : "shadow");
+    const project = await api.store.createProject({ name: "Crumb & Co. Bakery", allowed_origins: [origin], mode });
     secretKey = (await api.store.createApiKey(project.id, "secret")).key;
     publishableKey = (await api.store.createApiKey(project.id, "publishable")).key;
     apiUrl = api.url;
@@ -45,6 +49,7 @@ export async function startDemo(opts: { port?: number; apiPort?: number; mode?: 
     publishableKey,
     apiUrl,
     sdkScript: sdkBundle,
+    challengeScript: challengeBundle,
     remoteAddress: (_req, env) => (env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress,
   });
   handler = (req, env) => demo.app.fetch(req, env);
@@ -65,5 +70,5 @@ export async function startDemo(opts: { port?: number; apiPort?: number; mode?: 
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const d = await startDemo();
-  console.warn(`Crumb & Co. Bakery: ${d.url}  (Proofline API: ${d.apiUrl}, shadow mode)`);
+  console.warn(`Crumb & Co. Bakery: ${d.url}  (Proofline API: ${d.apiUrl}; DEMO_MODE=enforce for step-ups)`);
 }

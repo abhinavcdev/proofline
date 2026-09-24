@@ -70,6 +70,24 @@ describe("createProofline", () => {
   });
 });
 
+describe("verifyPassToken", () => {
+  it("fails closed when Proofline is unreachable and rejects junk without a call", async () => {
+    const f = vi.fn(async () => {
+      throw new TypeError("down");
+    });
+    const pl = createProofline({ secretKey: "pl_sk_test_x", fetch: f as unknown as typeof fetch });
+    expect(await pl.verifyPassToken("pl1.a.b")).toEqual({ valid: false, reason: "unavailable" });
+    expect(await pl.verifyPassToken("")).toEqual({ valid: false, reason: "invalid" });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes through the API's answer", async () => {
+    const { sk, fetchImpl } = await realApi();
+    const pl = createProofline({ secretKey: sk, baseUrl: "http://api.test", fetch: fetchImpl });
+    expect(await pl.verifyPassToken("pl1.forged.token")).toEqual({ valid: false, reason: "invalid" });
+  });
+});
+
 describe("helpers", () => {
   it("reads client details, trusting forwarding headers only when asked", () => {
     const h = { "x-forwarded-for": "203.0.113.1, 10.0.0.1", "user-agent": "UA", "accept-language": "en" };

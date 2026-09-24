@@ -23,6 +23,8 @@ export interface Reason {
 
 export interface AssessContext {
   account?: {
+    /** Your stable, opaque account id (not an email). Enables the passkey rung. */
+    id?: string;
     age_days?: number;
     /** Domain only (e.g. "gmail.com"), never the full address. */
     email_domain?: string;
@@ -47,6 +49,8 @@ export interface AssessInput {
   context?: AssessContext;
   /** The end user's connection. Use `clientFromRequest()` or `clientFromHeaders()`. */
   client?: ClientInfo;
+  /** Where to send a one-time code if a check is needed. Kept only while the check is open; never logged. */
+  contact?: { email?: string };
 }
 
 export interface AssessResult {
@@ -62,7 +66,16 @@ export interface AssessResult {
   degraded?: boolean;
   /** Set when failing open. */
   error?: "timeout" | "network" | "http" | "invalid_response";
+  /** Enforce-mode step-ups: send the user to your challenge page with this id. */
+  challenge?: { id: string; rung: Rung; expires_at: string };
 }
+
+export type VerifyPassResult =
+  | { valid: true; decision_id: string; challenge_id: string; event_type: EventType; rung: Rung }
+  | { valid: false; reason: "invalid" | "expired" | "replayed" | "unavailable" };
+
+/** Name of the field the challenge UI posts back to your page. */
+export const PASS_FIELD = "proofline_pass";
 
 export type FeedbackLabel = "false_positive" | "confirmed_bot";
 
@@ -125,6 +138,7 @@ export function createProofline(opts: ProoflineOptions) {
             ...(input.token ? { signal_token: input.token } : {}),
             ...(input.context ? { context: input.context } : {}),
             ...(input.client ? { client: input.client } : {}),
+            ...(input.contact?.email ? { contact: { email: input.contact.email } } : {}),
           },
           controller.signal,
         );
@@ -140,6 +154,27 @@ export function createProofline(opts: ProoflineOptions) {
         );
       } finally {
         clearTimeout(timer);
+      }
+    },
+
+    /**
+     * Check a pass token from a completed challenge. One-time: a second call
+     * returns `replayed`. Unlike assess(), this fails *closed* (`unavailable`)
+     * because it is the thing that lets a stepped-up user through.
+     */
+    async verifyPassToken(passToken: string | null | undefined): Promise<VerifyPassResult> {
+      if (!passToken || passToken.length > 4096) return { valid: false, reason: "invalid" };
+      try {
+        const res = await post("/v1/challenge/verify", { pass_token: passToken }, AbortSignal.timeout(timeoutMs * 2));
+        if (!res.ok) {
+          failOpen(new ProoflineError("http", `Proofline verify failed with HTTP ${res.status}`, res.status));
+          return { valid: false, reason: "unavailable" };
+        }
+        const json = (await res.json().catch(() => null)) as VerifyPassResult | null;
+        return json && typeof json.valid === "boolean" ? json : { valid: false, reason: "unavailable" };
+      } catch (err) {
+        failOpen(new ProoflineError("network", `Proofline unreachable: ${String(err)}`));
+        return { valid: false, reason: "unavailable" };
       }
     },
 
