@@ -16,7 +16,9 @@
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@types/node": "^22.0.0",
+    "esbuild": "^0.28.2",
     "eslint": "^10.11.0",
+    "happy-dom": "^20.14.5",
     "prettier": "^3.9.9",
     "tsx": "^4.23.15",
     "turbo": "^2.11.3",
