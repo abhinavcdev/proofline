@@ -94,7 +94,7 @@ export function signalsRoutes(deps: ApiDeps) {
 }
 
 /** Returns the allowed origin (and sets CORS headers), or null if not allowed. */
-function checkOrigin(c: Context, allowed: readonly string[]): string | null {
+export function checkOrigin(c: Context, allowed: readonly string[]): string | null {
   const origin = c.req.header("origin");
   const ok = allowed.includes("*") || (origin !== undefined && allowed.includes(origin));
   if (!ok) return null;

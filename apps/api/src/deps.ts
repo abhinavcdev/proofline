@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import type { DecisionProvider, ReplayGuard } from "@proofline/core";
+import type { DecisionProvider, EmailSender, IdVerifier, ReplayGuard } from "@proofline/core";
 import type { ApiKeyRecord, Project, Store } from "@proofline/db";
 import type { EdgeContext, IpReputation, RateCounter, WebBotAuthVerifier } from "@proofline/edge";
 
@@ -27,6 +27,10 @@ export interface ApiDeps {
   edgeContext?: (c: Context) => EdgeContext;
   /** Requests per minute per API key. */
   keyRateLimit?: { publishable: number; secret: number };
+  /** Sends one-time codes. Defaults to the console sender (development only). */
+  emailSender?: EmailSender;
+  /** Defaults to the stub that always reports `unavailable`. */
+  idVerifier?: IdVerifier;
   logger?: Logger;
   now?: () => number;
   /** Where background work (decision logging) runs; Workers use executionCtx.waitUntil. */

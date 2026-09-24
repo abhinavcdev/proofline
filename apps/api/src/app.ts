@@ -4,6 +4,7 @@ import type { ApiDeps, AppEnv } from "./deps.js";
 import { apiError } from "./errors.js";
 import { timing } from "./middleware/timing.js";
 import { assessRoutes } from "./routes/assess.js";
+import { challengeRoutes } from "./routes/challenge.js";
 import { feedbackRoutes } from "./routes/feedback.js";
 import { signalsRoutes } from "./routes/signals.js";
 
@@ -16,6 +17,7 @@ export function createApp(deps: ApiDeps) {
   app.route("/v1", signalsRoutes(deps));
   app.route("/v1", assessRoutes(deps));
   app.route("/v1", feedbackRoutes(deps));
+  app.route("/v1", challengeRoutes(deps));
 
   app.notFound((c) => apiError(c, 404, "not_found", "No such route"));
   app.onError((err, c) => {

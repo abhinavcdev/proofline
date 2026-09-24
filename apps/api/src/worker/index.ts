@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { ConsoleEmailSender, ResendEmailSender, type EmailSender } from "@proofline/core";
 import { DrizzleStore } from "@proofline/db";
 import { StaticIpList, WebBotAuthVerifier, type TrustedAgent } from "@proofline/edge";
 import { createApp } from "../app.js";
@@ -19,6 +20,9 @@ export interface Env extends ProviderEnv {
   TRUSTED_AGENTS?: string;
   /** Comma-separated CIDRs. */
   BAD_IP_CIDRS?: string;
+  /** One-time codes go through Resend when set; otherwise they're logged (development only). */
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
 }
 
 const logger = {
@@ -27,10 +31,12 @@ const logger = {
 };
 
 // Per-isolate: pure configuration, no I/O objects (those can't cross requests).
-let isolate: { key: string; provider: ReturnType<typeof selectProvider>; agents: WebBotAuthVerifier; bad: StaticIpList } | undefined;
+let isolate:
+  | { key: string; provider: ReturnType<typeof selectProvider>; agents: WebBotAuthVerifier; bad: StaticIpList; email: EmailSender }
+  | undefined;
 
 function isolateDeps(env: Env) {
-  const key = [env.DECISION_PROVIDER, env.TYPESAFE_API_KEY?.length, env.JEV_MODEL, env.TRUSTED_AGENTS, env.BAD_IP_CIDRS].join("|");
+  const key = [env.DECISION_PROVIDER, env.TYPESAFE_API_KEY?.length, env.JEV_MODEL, env.TRUSTED_AGENTS, env.BAD_IP_CIDRS, env.RESEND_API_KEY?.length, env.EMAIL_FROM].join("|");
   if (!isolate || isolate.key !== key) {
     const trusted = env.TRUSTED_AGENTS ? (JSON.parse(env.TRUSTED_AGENTS) as TrustedAgent[]) : [];
     isolate = {
@@ -38,6 +44,9 @@ function isolateDeps(env: Env) {
       provider: selectProvider(env),
       agents: new WebBotAuthVerifier({ trusted }),
       bad: new StaticIpList(env.BAD_IP_CIDRS ? env.BAD_IP_CIDRS.split(",").map((s) => s.trim()).filter(Boolean) : []),
+      email: env.RESEND_API_KEY
+        ? new ResendEmailSender(env.RESEND_API_KEY, env.EMAIL_FROM ?? "Proofline <verify@proofline.dev>")
+        : new ConsoleEmailSender(),
     };
   }
   return isolate;
@@ -45,7 +54,7 @@ function isolateDeps(env: Env) {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const { provider, agents, bad } = isolateDeps(env);
+    const { provider, agents, bad, email } = isolateDeps(env);
     // Hyperdrive pools connections; a client per request is the recommended pattern.
     const sql = postgres(env.HYPERDRIVE.connectionString, { max: 5, fetch_types: false, prepare: false });
     const pending: Promise<unknown>[] = [];
@@ -58,6 +67,7 @@ export default {
       provider,
       agents,
       ipReputation: bad,
+      emailSender: email,
       logger,
       waitUntil: (_c, p) => pending.push(p),
     });

@@ -20,6 +20,7 @@
     "@proofline/db": "workspace:*",
     "@proofline/edge": "workspace:*",
     "@proofline/questions": "workspace:*",
+    "@simplewebauthn/server": "^14.0.2",
     "drizzle-orm": "^0.45.3",
     "hono": "^4.13.9",
     "postgres": "^3.4.9",

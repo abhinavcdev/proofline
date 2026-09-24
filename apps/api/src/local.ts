@@ -1,6 +1,6 @@
 import { serve, type ServerType } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
-import { MemoryReplayGuard } from "@proofline/core";
+import { ConsoleEmailSender, MemoryReplayGuard, ResendEmailSender } from "@proofline/core";
 import type { Store } from "@proofline/db";
 import { createPgliteStore, createPostgresStore } from "@proofline/db/node";
 import { MemoryRateCounter, StaticIpList, genericContext } from "@proofline/edge";
@@ -48,6 +48,9 @@ export async function startLocalApi(opts: LocalApiOptions = {}): Promise<LocalAp
     tokenSecrets: [env.TOKEN_SIGNING_SECRET ?? DEV_TOKEN_SECRET],
     ipSaltSecret: env.IP_SALT_SECRET ?? DEV_SALT_SECRET,
     provider: selectProvider(env),
+    emailSender: env.RESEND_API_KEY
+      ? new ResendEmailSender(env.RESEND_API_KEY, env.EMAIL_FROM ?? "Proofline <verify@proofline.dev>")
+      : new ConsoleEmailSender(),
     ipReputation: new StaticIpList(env.BAD_IP_CIDRS?.split(",").map((s) => s.trim()).filter(Boolean) ?? []),
     edgeContext: (c) => {
       const incoming = (c.env as { incoming?: { socket?: { remoteAddress?: string }; rawHeaders?: string[] } } | undefined)?.incoming;

@@ -5,6 +5,7 @@ import {
   RulesOnlyProvider,
   ServerContext,
   buildState,
+  isPlausibleEmail,
   decide,
   defaultPolicy,
   redact,
@@ -24,12 +25,18 @@ import { requireKey } from "../middleware/apiKey.js";
 import { timed } from "../middleware/timing.js";
 import { SIGNAL_TOKEN_TYPE, SignalTokenData } from "../tokens.js";
 import { readJson } from "./signals.js";
+import { accountRef, createChallenge } from "../challenge/service.js";
 
 const AssessBody = z.object({
   event_type: EventType,
   /** The `proofline_token` form field, if the browser SDK produced one. */
   signal_token: z.string().max(8192).optional(),
   context: ServerContext.optional(),
+  /**
+   * Where to send a one-time code if a step-up needs one. Used only for the
+   * challenge, kept only while it is open, and never logged.
+   */
+  contact: z.object({ email: z.string().max(254) }).optional(),
   /**
    * The end user's connection as seen by the customer's server. Used for
    * network signals when there is no valid signal token (for example a bot
@@ -99,9 +106,14 @@ export function assessRoutes(deps: ApiDeps) {
 
     // 4–5. Model (with fallback) → policy → mode.
     const policy = (await deps.store.getPolicy(project.id, body.event_type)) ?? defaultPolicy(body.event_type);
+    // Capabilities reflect what Proofline itself can do for this user.
+    const email = body.contact?.email && isPlausibleEmail(body.contact.email) ? body.contact.email : undefined;
+    const acctId = body.context?.account?.id;
+    const acctRef = acctId ? await accountRef(project.id, acctId) : undefined;
+    const hasPasskey = acctRef ? (await deps.store.listPasskeys(project.id, acctRef)).length > 0 : false;
     const capabilities: Capabilities = {
-      passkey: body.context?.account?.has_passkey ?? false,
-      email: body.context?.account?.has_verified_email ?? false,
+      passkey: !!acctRef && (hasPasskey || body.event_type === "signup"),
+      email: !!email,
       id_verify: false,
     };
     const out = await decide({
@@ -165,6 +177,20 @@ export function assessRoutes(deps: ApiDeps) {
     record.t_total_ms = Math.round((perf() - t0) * 10) / 10;
     background(c, deps, deps.store.insertDecision(record));
 
+    // Enforce-mode step-up: create the challenge now, so the browser can start it right away.
+    const stepRung = rungOf(d.effective_action);
+    const challenge = stepRung
+      ? await createChallenge(deps, {
+          project,
+          decision_id: id,
+          event_type: body.event_type,
+          rung: stepRung,
+          ...(email ? { contact_email: email } : {}),
+          ...(acctRef ? { account_ref: acctRef } : {}),
+          now: now(),
+        })
+      : undefined;
+
     return c.json({
       decision_id: id,
       action: d.effective_action,
@@ -173,6 +199,7 @@ export function assessRoutes(deps: ApiDeps) {
       risk: d.risk,
       reasons: d.reasons,
       ...(out.source === "fallback" ? { degraded: true } : {}),
+      ...(challenge ? { challenge: { id: challenge.id, rung: challenge.rung, expires_at: challenge.expires_at.toISOString() } } : {}),
     });
   });
 
