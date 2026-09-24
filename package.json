@@ -1,0 +1,27 @@
+{
+  "name": "proofline",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "check": "pnpm lint && turbo run typecheck test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.11.0",
+    "prettier": "^3.9.9",
+    "turbo": "^2.11.3",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.1"
+  },
+  "type": "module"
+}

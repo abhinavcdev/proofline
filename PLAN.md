@@ -1,21 +1,22 @@
 # Proofline: MVP Plan
 
-> Status: **Draft for review.** No code has been written yet.
+> Status: **Approved. M1 complete** (JevProvider wire schema pending Q1).
 > Last updated: 2026-09-24
 
 Proofline answers one question for every sensitive event: **is this a human, a legitimate agent, or a bad bot?** It then applies the lightest check that settles the question.
 
 ---
 
-## 0. Blockers and open questions (please read first)
+## 0. Decisions and open questions
 
-| # | Question | Why it matters | My default if you don't answer |
-|---|----------|----------------|--------------------------------|
-| Q1 | **I could not read https://docs.typesafe.ai.** This environment's network policy blocks `docs.typesafe.ai`. | The brief says to match Jev's real request/response schema exactly. I won't guess field names. | In M1 I build everything around a `DecisionProvider` interface and a `JevAnswers` domain type that I own. `JevProvider`'s wire schema (URL, auth header, request body, response Zod schema) stays a clearly marked stub until I can read the docs. You can fix access either way: add `docs.typesafe.ai` and the Jev API host to the environment's allowed domains (cloud environment menu in the title bar → Edit → Network access), or paste the API reference into `docs/vendor/typesafe-jev.md`. |
-| Q2 | Does a `noul` answer come with a `confidence`, or only a probability? | The example rules say "is_automated < 0.2 with confidence ≥ 0.8". | If Jev returns no confidence for `noul`, the policy uses `confidence = |2p − 1|` (distance from 0.5), and records that it was derived. |
-| Q3 | How the signal token gets signed (see §3.1). The browser can't hold a signing secret. | Security. | The SDK POSTs its aggregates to a new endpoint, `POST /v1/signals`, using the publishable key. The API signs them and returns a short-lived token, and the SDK puts it in a hidden form field. This adds one endpoint to the spec. |
-| Q4 | Postgres hosting for the Worker | Needed for deploys, not for local dev or tests | Use Cloudflare Hyperdrive in front of any Postgres (for example Neon) with `postgres-js`. Local dev uses docker-compose Postgres. Unit and integration tests use PGlite, which runs in-process with no Docker. |
-| Q5 | Latency: the Jev timeout is 400 ms, but the p95 target is 300 ms end to end. | Both can't hold if Jev's own p95 is above about 250 ms. | Keep 400 ms as the hard cap. The p95 target assumes Jev's p95 is at most about 230 ms. I'll measure it in M5 and report. The Jev timeout is configurable per project. |
+| # | Topic | Status |
+|---|-------|--------|
+| Q1 | **Jev wire schema.** `docs.typesafe.ai` is still blocked by this environment's network policy. | **Open.** `JevProvider` is complete apart from its `JevWire` adapter. `PENDING_JEV_WIRE` fails fast without calling out, so every decision degrades to rules and is recorded as `decision_source: "fallback"`. To unblock: allow `docs.typesafe.ai` and the Jev API host in the environment's network settings (a new session may be needed for the change to take effect), or paste the API reference into `docs/vendor/typesafe-jev.md`. |
+| Q2 | `noul` confidence | **Open (depends on Q1).** Internal `NoulAnswer` has `confidence` + `confidence_derived`. If Jev returns none, the wire adapter sets `confidence = |2p − 1|` and `confidence_derived: true`. |
+| Q3 | Signal-token signing | **Decided:** new `POST /v1/signals` (publishable key) returns an HMAC-signed, 5-minute, one-time token. |
+| Q4 | Postgres for Workers | **Decided:** Hyperdrive in front of Postgres (for example Neon) for deploys, Docker Postgres locally, PGlite for tests. |
+| Q5 | Latency (400 ms Jev cap vs 300 ms p95) | **Decided:** keep the 400 ms cap and measure in M5. Hard-blocked events skip the Jev call entirely. |
+| Q6 | Dashboard auth | **Decided:** Better Auth with the magic-link and passkey plugins. |
 
 ---
 
@@ -213,16 +214,22 @@ interface DecisionProvider {
 
 ## 5. Milestones
 
-### M1: Core
-- [ ] pnpm + Turborepo monorepo, `packages/config` (strict tsconfig, eslint, vitest)
-- [ ] `packages/core/types`: Zod schemas for signals, state, answers, actions, policy
-- [ ] `packages/questions/v1.ts` + schema + registry
-- [ ] `DecisionProvider` + `MockProvider` + `RulesOnlyProvider` + `withFallback` (400 ms)
-- [ ] `JevProvider`: real client **if Q1 is resolved**, otherwise an interface-complete stub with a TODO and a failing-closed-to-fallback behaviour
-- [ ] State builder with bucketing, truncation, redaction, size guard
-- [ ] Policy engine, default per-event policies, `applyMode`, reasons
-- [ ] Token sign/verify and PoW primitives
-- [ ] Unit tests for all of the above; `pnpm test` green
+### M1: Core ✅
+- [x] pnpm + Turborepo monorepo, `packages/config` (strict tsconfig), ESLint (flat config), Prettier, Vitest
+- [x] `packages/core/types`: Zod schemas for signals, state, answers, actions, policy
+- [x] `packages/questions/v1.ts` + schema + registry
+- [x] `DecisionProvider` + `MockProvider` + `RulesOnlyProvider` + `decideWithFallback` (400 ms, aborts the request)
+- [ ] `JevProvider`: transport, auth and error handling done; **`JevWire` adapter blocked on Q1** (degrades to rules until then)
+- [x] State builder with bucketing, truncation, PII redaction, 600-token guard
+- [x] Policy engine, default per-event policies, `applyMode`, reasons
+- [x] Token sign/verify (with key rotation and replay guard), PoW primitives, log redaction
+- [x] `decide()` pipeline (hard block → skip model → policy → mode) with stage timings
+- [x] 112 unit tests; `pnpm lint && pnpm turbo run typecheck test` green
+
+**M1 notes**
+- On `comment` and `form_submit`, spam rules run *before* the confident-automation block, so spam is shadow-dropped instead of the sender learning they were caught.
+- The fallback never blocks on heuristics alone: `RulesOnlyProvider` caps confidence at 0.6, so the confidence-gated rules can't fire. Hard checks still block.
+- The mock and rules-only providers share one feature extractor (`core/src/features.ts`). The policy engine uses the same features to write its reasons.
 
 ### M2: Signals
 - [ ] `sdk-browser` collectors, PoW worker, consent, token fetch, size budget check
