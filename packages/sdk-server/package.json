@@ -1,0 +1,20 @@
+{
+  "name": "@proofline/sdk-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@proofline/api": "workspace:*",
+    "@proofline/config": "workspace:*",
+    "@proofline/core": "workspace:*",
+    "@proofline/db": "workspace:*",
+    "@proofline/edge": "workspace:*"
+  }
+}

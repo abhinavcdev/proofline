@@ -1,5 +1,5 @@
 import type { QuestionSet } from "@proofline/questions";
-import { validateAnswers, type Answers } from "../types/answers.js";
+import { AnswerValidationError, validateAnswers, type Answers } from "../types/answers.js";
 import type { State } from "../types/state.js";
 import { heuristicAnswers } from "./heuristics.js";
 
@@ -103,8 +103,8 @@ export async function decideWithFallback(
         reason = "invalid_response";
       }
     }
-  } catch {
-    reason = controller.signal.aborted ? "timeout" : "error";
+  } catch (err) {
+    reason = controller.signal.aborted ? "timeout" : err instanceof AnswerValidationError ? "invalid_response" : "error";
   } finally {
     clearTimeout(timer);
     if (!controller.signal.aborted) controller.abort();

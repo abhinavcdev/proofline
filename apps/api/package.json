@@ -1,0 +1,33 @@
+{
+  "name": "@proofline/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./local": "./src/local.ts"
+  },
+  "scripts": {
+    "dev": "tsx src/local.ts",
+    "dev:worker": "wrangler dev",
+    "build:worker": "wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@proofline/core": "workspace:*",
+    "@proofline/db": "workspace:*",
+    "@proofline/edge": "workspace:*",
+    "@proofline/questions": "workspace:*",
+    "@simplewebauthn/server": "^14.0.2",
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.13.9",
+    "postgres": "^3.4.9",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@proofline/config": "workspace:*",
+    "wrangler": "^4.137.0"
+  }
+}

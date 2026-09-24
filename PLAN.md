@@ -1,6 +1,6 @@
 # Proofline: MVP Plan
 
-> Status: **Approved. M1 complete** (JevProvider wire schema pending Q1).
+> Status: **Approved. M1, M2 and M3 complete.**
 > Last updated: 2026-09-24
 
 Proofline answers one question for every sensitive event: **is this a human, a legitimate agent, or a bad bot?** It then applies the lightest check that settles the question.
@@ -11,8 +11,8 @@ Proofline answers one question for every sensitive event: **is this a human, a l
 
 | # | Topic | Status |
 |---|-------|--------|
-| Q1 | **Jev wire schema.** `docs.typesafe.ai` is still blocked by this environment's network policy. | **Open.** `JevProvider` is complete apart from its `JevWire` adapter. `PENDING_JEV_WIRE` fails fast without calling out, so every decision degrades to rules and is recorded as `decision_source: "fallback"`. To unblock: allow `docs.typesafe.ai` and the Jev API host in the environment's network settings (a new session may be needed for the change to take effect), or paste the API reference into `docs/vendor/typesafe-jev.md`. |
-| Q2 | `noul` confidence | **Open (depends on Q1).** Internal `NoulAnswer` has `confidence` + `confidence_derived`. If Jev returns none, the wire adapter sets `confidence = |2p − 1|` and `confidence_derived: true`. |
+| Q1 | **Jev wire schema** | **Resolved.** Implemented from the TypeSafe API reference as `TYPESAFE_WIRE`: `POST https://api.typesafe.ai/v1/systemone` with bearer auth and `{ model, state, questions }`. Summary in `docs/vendor/typesafe-jev.md`. `JEV_MODEL` selects the model (default `jev-latest`). |
+| Q2 | `noul` confidence | **Resolved.** Jev returns no confidence for nouls, so the adapter derives `confidence = |2p − 1|` and sets `confidence_derived: true`. Choice and score answers use Jev's own confidence. |
 | Q3 | Signal-token signing | **Decided:** new `POST /v1/signals` (publishable key) returns an HMAC-signed, 5-minute, one-time token. |
 | Q4 | Postgres for Workers | **Decided:** Hyperdrive in front of Postgres (for example Neon) for deploys, Docker Postgres locally, PGlite for tests. |
 | Q5 | Latency (400 ms Jev cap vs 300 ms p95) | **Decided:** keep the 400 ms cap and measure in M5. Hard-blocked events skip the Jev call entirely. |
@@ -182,9 +182,11 @@ interface DecisionProvider {
 ### 3.9 API (`apps/api`)
 | Route | Key scope | Notes |
 |---|---|---|
-| `POST /v1/signals` | publishable | origin allowlist, returns signal token |
+| `POST /v1/signals` | publishable | origin allowlist, returns signal token; `text/plain` JSON body with `key`, so no CORS preflight |
+| `POST /v1/pow` | publishable | PoW challenge when the project has `pow_bits` set |
 | `POST /v1/assess` | secret | main pipeline |
-| `POST /v1/challenge/start` / `complete` | publishable | browser-facing; bound to `decision_id` |
+| `POST /v1/challenge/start` / `complete` / `fallback` | publishable | browser-facing; challenge id returned by `/v1/assess`; origin allowlist |
+| `POST /v1/challenge/verify` | secret | one-time pass-token check for the customer's server |
 | `POST /v1/feedback` | secret | training labels |
 | `GET /v1/health` | none | not applicable |
 
@@ -219,7 +221,7 @@ interface DecisionProvider {
 - [x] `packages/core/types`: Zod schemas for signals, state, answers, actions, policy
 - [x] `packages/questions/v1.ts` + schema + registry
 - [x] `DecisionProvider` + `MockProvider` + `RulesOnlyProvider` + `decideWithFallback` (400 ms, aborts the request)
-- [ ] `JevProvider`: transport, auth and error handling done; **`JevWire` adapter blocked on Q1** (degrades to rules until then)
+- [x] `JevProvider` with the documented `TYPESAFE_WIRE` adapter (resolved Q1 in M2)
 - [x] State builder with bucketing, truncation, PII redaction, 600-token guard
 - [x] Policy engine, default per-event policies, `applyMode`, reasons
 - [x] Token sign/verify (with key rotation and replay guard), PoW primitives, log redaction
@@ -231,19 +233,39 @@ interface DecisionProvider {
 - The fallback never blocks on heuristics alone: `RulesOnlyProvider` caps confidence at 0.6, so the confidence-gated rules can't fire. Hard checks still block.
 - The mock and rules-only providers share one feature extractor (`core/src/features.ts`). The policy engine uses the same features to write its reasons.
 
-### M2: Signals
-- [ ] `sdk-browser` collectors, PoW worker, consent, token fetch, size budget check
-- [ ] `packages/edge` network signals, hashing, header checks, agent detection, rate counters, modes
-- [ ] `packages/db` schema + migrations + `EventStore` (Postgres / PGlite / memory)
-- [ ] `apps/api`: `/v1/signals`, `/v1/assess`, `/v1/feedback`, API keys + scopes, rate limit, stage timings
-- [ ] `sdk-server`: `assess()`, `feedback()`, fail-open
-- [ ] `apps/demo-site` wired up in **shadow mode**, plus the shadow-never-blocks test
+### M2: Signals ✅
+- [x] `sdk-browser` collectors, PoW worker, consent, token fetch, size budget check (4.1 KB gzip; the build fails over 15 KB)
+- [x] `packages/edge` network signals, hashing, header checks, agent detection (Web Bot Auth), rate counters, modes
+- [x] `packages/db` schema + migrations + `Store` (Postgres / PGlite / memory, one contract test for all)
+- [x] `apps/api`: `/v1/signals`, `/v1/pow`, `/v1/assess`, `/v1/feedback`, API keys + scopes, rate limit, stage timings; Workers entry (Hyperdrive + Durable Object) and Node entry
+- [x] `sdk-server`: `assess()`, `feedback()`, fail-open
+- [x] `apps/demo-site` wired up in **shadow mode**, plus the shadow-never-blocks tests (bot corpus in Vitest, real Chromium in Playwright)
+- [x] 192 unit and integration tests plus 3 Playwright E2E tests; `pnpm lint && pnpm turbo run typecheck test` green, `pnpm e2e` green
 
-### M3: Step-up
-- [ ] `/v1/challenge/start|complete`, challenges state machine, pass tokens, `verifyToken()`
-- [ ] PoW rung, passkey rung (SimpleWebAuthn), email OTP rung (`EmailSender`: Resend + console), `IdVerifier` stub, review rung
-- [ ] Accessible challenge UI in the demo site plus axe checks
-- [ ] Enforce mode end to end
+**M2 notes**
+- **Signal token contents.** The token carries the browser and edge signals, so `/v1/assess` needs no lookup. It's signed, not encrypted, so the end user can read it. It contains aggregates, the daily IP hash, ASN and header fingerprint, but never a raw IP.
+- **`/v1/assess` accepts optional `client: { ip, user_agent, accept_language }`.** When there's no valid token (for example curl posting straight to the form), network signals come from these. The IP is hashed immediately. `sdk-server` has `clientFromHeaders()`, which trusts forwarding headers only with `trustProxy`.
+- **Tokens are one-time.** A second `/v1/assess` with the same token is a hard block (`replayed`). `sdk-server` never retries `assess()`, for this reason.
+- **Header order.** The Fetch `Headers` object sorts header names (Workers, undici), so the fingerprint uses header order only when an adapter supplies raw names (the Node entry does). `unusual_header_order` is not emitted yet.
+- **ASN classes** come from a short list of known networks plus AS-organisation keywords. Anything else is `unknown`; we never assume `residential`.
+- **Verified agents** (Web Bot Auth against the `TRUSTED_AGENTS` allowlist, or Cloudflare `verifiedBot`) get separate rate-limit counters. Agent-looking user agents and failed signatures count as `unverified_claim`.
+- **Enforce mode and spam.** `shadow_drop` looks like success to the sender, but the demo site discards the submission. The enforce-mode corpus test checks this.
+- The Worker bundles with `wrangler deploy --dry-run` (229 KB gzip). It hasn't been deployed: that needs a Cloudflare account, a Hyperdrive id and secrets.
+
+### M3: Step-up ✅
+- [x] `/v1/challenge/start|complete|fallback|verify`, challenge state machine (compare-and-set), one-time pass tokens, `sdk-server.verifyPassToken()`
+- [x] PoW rung (18 bits), passkey rung (SimpleWebAuthn: register at signup, authenticate afterwards), email OTP rung (`EmailSender`: Resend + console + memory), `IdVerifier` stub, review rung (queued `review_items`)
+- [x] Accessible challenge UI (`proofline-challenge.js`, 3.6 KB gzip) in the demo site, plus axe checks (WCAG 2.1 A/AA) on the forms and every rung
+- [x] Enforce mode end to end: Playwright covers each rung in real Chromium (virtual authenticator for passkeys), the "Use another way" fallback, and pass-token replay
+- [x] 221 unit and integration tests plus 9 Playwright E2E tests; lint, typecheck and tests green; the Worker bundles (357 KB gzip)
+
+**M3 notes**
+- **Capabilities describe what Proofline can do for the user,** not the customer's own account flags. `email_otp` needs `contact.email` in the assess request. `passkey` needs `context.account.id`, and either a passkey registered through Proofline or a signup event (to register one). `has_passkey` and `has_verified_email` are now informational only.
+- **Personal data is short-lived.** The contact email and rung secrets (the OTP hash, the WebAuthn challenge) are stored only on the open challenge and cleared on any terminal state. They're never written to `decision_events`. The account id is stored only as `sha256(project_id:account_id)`.
+- **No dead ends.** Five wrong answers, an unavailable rung, or "Use another way" all move down the ladder (pow/passkey → email_otp → review). A rung the user can't complete is skipped, and `review` is always last.
+- **`verifyPassToken()` fails closed** (`unavailable`), unlike `assess()`, because it's what lets a stepped-up user through. Pass tokens are one-time and bound to the project; the demo also checks the challenge id and decision id.
+- **The passkey RP ID is the hostname of the page running the challenge** (an allowlisted origin). A phished assertion from another origin fails.
+- The **demo site** keeps submissions that are waiting on a check in memory, keyed by challenge id. A real site keeps them in its session store. Set `DEMO_MODE=enforce` to try the step-ups locally; codes print to the console unless `RESEND_API_KEY` is set.
 
 ### M4: Dashboard
 - [ ] Next.js + Tailwind + shadcn/ui, Better Auth magic link + passkey

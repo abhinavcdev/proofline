@@ -11,13 +11,17 @@
     "typecheck": "turbo run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "check": "pnpm lint && turbo run typecheck test"
+    "check": "pnpm lint && turbo run typecheck test",
+    "e2e": "turbo run e2e"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@types/node": "^22.0.0",
+    "esbuild": "^0.28.2",
     "eslint": "^10.11.0",
+    "happy-dom": "^20.14.5",
     "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
     "turbo": "^2.11.3",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.70.1",

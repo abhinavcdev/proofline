@@ -12,4 +12,8 @@ export default tseslint.config(
       "no-console": ["error", { allow: ["warn", "error"] }],
     },
   },
+  {
+    files: ["**/*.mjs"],
+    languageOptions: { globals: { console: "readonly", process: "readonly" } },
+  },
 );

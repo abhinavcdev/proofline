@@ -108,9 +108,15 @@ export type EmailDomainType = z.infer<typeof EmailDomainType>;
 export const ServerContext = z.object({
   account: z
     .object({
+      /**
+       * Your stable, opaque id for the account (not an email). Hashed per
+       * project; used only to find passkeys the account registered through Proofline.
+       */
+      id: z.string().min(1).max(128).optional(),
       age_days: z.number().min(0).max(100_000).optional(),
       /** Domain only, never the full address. Classified, then discarded. */
       email_domain: z.string().max(253).optional(),
+      /** Informational; the passkey rung uses passkeys registered with Proofline. */
       has_passkey: z.boolean().optional(),
       has_verified_email: z.boolean().optional(),
     })

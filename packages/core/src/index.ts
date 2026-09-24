@@ -23,3 +23,8 @@ export * from "./token/hmac.js";
 export * from "./pow/pow.js";
 export { redact, maskSecret } from "./log.js";
 export { decide, isHardBlocked, type DecideInput, type DecideOutput } from "./pipeline.js";
+
+export * from "./challenge/ladder.js";
+export { generateOtp, hashOtp, maskEmail, timingSafeEqual, isPlausibleEmail } from "./challenge/otp.js";
+export * from "./challenge/email.js";
+export * from "./challenge/idverify.js";
