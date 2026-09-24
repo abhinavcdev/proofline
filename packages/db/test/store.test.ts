@@ -103,4 +103,50 @@ describe.each(backends)("%s store", (_name, make) => {
     const f = await store.insertFeedback({ project_id: p.id, decision_id: d.id, label: "false_positive", note: "real customer" });
     expect(f.id).toMatch(/^[0-9a-f-]{36}$/);
   });
+
+  it("runs the challenge state machine with compare-and-set", async () => {
+    const store = await make();
+    const p = await store.createProject({ name: "p" });
+    const c = await store.createChallenge({
+      id: "ch_test_1",
+      project_id: p.id,
+      decision_id: uuidv7(),
+      event_type: "login",
+      rung: "email_otp",
+      state: "pending",
+      attempts: 0,
+      sends: 0,
+      last_sent_at: null,
+      account_ref: null,
+      contact_email: "ada@gmail.com",
+      secret: null,
+      tried: [],
+      expires_at: new Date(Date.now() + 60_000),
+    });
+    expect(c.version).toBe(0);
+    const u1 = await store.updateChallenge(c.id, 0, { state: "issued", secret: { otp_hash: "abc" }, sends: 1 });
+    expect(u1).toMatchObject({ version: 1, state: "issued", secret: { otp_hash: "abc" } });
+    // A stale writer loses.
+    expect(await store.updateChallenge(c.id, 0, { attempts: 1 })).toBeNull();
+    const u2 = await store.updateChallenge(c.id, 1, { state: "passed", secret: null, contact_email: null, tried: ["email_otp"] });
+    expect(u2).toMatchObject({ version: 2, state: "passed", secret: null, contact_email: null, tried: ["email_otp"] });
+    expect(await store.getChallenge(p.id, c.id)).toMatchObject({ state: "passed" });
+    expect(await store.getChallenge("other", c.id)).toBeNull();
+  });
+
+  it("stores end-user passkeys per account and review items", async () => {
+    const store = await make();
+    const p = await store.createProject({ name: "p" });
+    await store.addPasskey({ project_id: p.id, credential_id: "cred1", account_ref: "acct", public_key: "pk", counter: 0, transports: ["internal"] });
+    await expect(store.addPasskey({ project_id: p.id, credential_id: "cred1", account_ref: "acct", public_key: "pk", counter: 0, transports: [] })).rejects.toThrow();
+    await store.updatePasskeyCounter(p.id, "cred1", 7);
+    expect(await store.listPasskeys(p.id, "acct")).toEqual([
+      { project_id: p.id, credential_id: "cred1", account_ref: "acct", public_key: "pk", counter: 7, transports: ["internal"] },
+    ]);
+    expect(await store.listPasskeys(p.id, "other")).toEqual([]);
+
+    const r = await store.createReviewItem({ project_id: p.id, challenge_id: "ch_1", decision_id: uuidv7(), event_type: "signup" });
+    expect(r.state).toBe("open");
+    expect((await store.listReviewItems(p.id, "open")).map((x) => x.id)).toEqual([r.id]);
+  });
 });

@@ -1,7 +1,7 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
-import { EventPolicy, type EventType, type Mode } from "@proofline/core";
-import { apiKeys, decisionEvents, feedback, organizations, policies, projects } from "./schema.js";
+import { EventPolicy, type ChallengeState, type EventType, type Mode, type Rung } from "@proofline/core";
+import { apiKeys, challenges, decisionEvents, endUserPasskeys, feedback, organizations, policies, projects, reviewItems } from "./schema.js";
 import { generateApiKey, uuidv7, type KeyEnv, type KeyScope } from "./ids.js";
 
 export interface Project {
@@ -46,6 +46,45 @@ export interface CreateProjectInput {
   jev_timeout_ms?: number;
 }
 
+export interface Challenge {
+  id: string;
+  project_id: string;
+  decision_id: string;
+  event_type: EventType;
+  rung: Rung;
+  state: ChallengeState;
+  version: number;
+  attempts: number;
+  sends: number;
+  last_sent_at: Date | null;
+  account_ref: string | null;
+  contact_email: string | null;
+  secret: Record<string, unknown> | null;
+  tried: Rung[];
+  expires_at: Date;
+}
+
+export type ChallengePatch = Partial<Omit<Challenge, "id" | "project_id" | "decision_id" | "event_type" | "version">>;
+
+export interface EndUserPasskey {
+  project_id: string;
+  credential_id: string;
+  account_ref: string;
+  public_key: string;
+  counter: number;
+  transports: string[];
+}
+
+export interface ReviewItem {
+  id: string;
+  project_id: string;
+  challenge_id: string;
+  decision_id: string;
+  event_type: EventType;
+  state: "open" | "approved" | "rejected";
+  created_at: Date;
+}
+
 /**
  * Persistence used by the API. `DrizzleStore` covers Postgres and PGlite;
  * `MemoryStore` is for unit tests and quick local runs.
@@ -63,6 +102,18 @@ export interface Store {
   /** Returns the plaintext key once. */
   createApiKey(projectId: string, scope: KeyScope, env?: KeyEnv): Promise<{ key: string; record: ApiKeyRecord }>;
   revokeApiKey(id: string): Promise<void>;
+
+  createChallenge(c: Omit<Challenge, "version">): Promise<Challenge>;
+  getChallenge(projectId: string, id: string): Promise<Challenge | null>;
+  /** Compare-and-set on `version`; returns the updated row, or null if it changed underneath us. */
+  updateChallenge(id: string, expectedVersion: number, patch: ChallengePatch): Promise<Challenge | null>;
+
+  listPasskeys(projectId: string, accountRef: string): Promise<EndUserPasskey[]>;
+  addPasskey(p: EndUserPasskey): Promise<void>;
+  updatePasskeyCounter(projectId: string, credentialId: string, counter: number): Promise<void>;
+
+  createReviewItem(item: Omit<ReviewItem, "id" | "state" | "created_at">): Promise<ReviewItem>;
+  listReviewItems(projectId: string, state?: ReviewItem["state"]): Promise<ReviewItem[]>;
 }
 
 function projectDefaults(input: CreateProjectInput, orgId: string): Project {
@@ -157,6 +208,54 @@ export class MemoryStore implements Store {
     const k = this.keys.get(id);
     if (k) k.revoked_at = new Date();
   }
+
+  readonly challenges = new Map<string, Challenge>();
+  readonly passkeys: EndUserPasskey[] = [];
+  readonly reviews: ReviewItem[] = [];
+
+  async createChallenge(c: Omit<Challenge, "version">) {
+    const row = { ...c, version: 0, tried: [...c.tried] };
+    this.challenges.set(c.id, row);
+    return structuredClone(row);
+  }
+
+  async getChallenge(projectId: string, id: string) {
+    const c = this.challenges.get(id);
+    return c && c.project_id === projectId ? structuredClone(c) : null;
+  }
+
+  async updateChallenge(id: string, expectedVersion: number, patch: ChallengePatch) {
+    const c = this.challenges.get(id);
+    if (!c || c.version !== expectedVersion) return null;
+    Object.assign(c, patch, { version: c.version + 1 });
+    return structuredClone(c);
+  }
+
+  async listPasskeys(projectId: string, accountRef: string) {
+    return this.passkeys.filter((p) => p.project_id === projectId && p.account_ref === accountRef).map((p) => ({ ...p }));
+  }
+
+  async addPasskey(p: EndUserPasskey) {
+    if (this.passkeys.some((x) => x.project_id === p.project_id && x.credential_id === p.credential_id)) {
+      throw new Error("duplicate credential");
+    }
+    this.passkeys.push({ ...p });
+  }
+
+  async updatePasskeyCounter(projectId: string, credentialId: string, counter: number) {
+    const p = this.passkeys.find((x) => x.project_id === projectId && x.credential_id === credentialId);
+    if (p) p.counter = counter;
+  }
+
+  async createReviewItem(item: Omit<ReviewItem, "id" | "state" | "created_at">) {
+    const r: ReviewItem = { ...item, id: uuidv7(), state: "open", created_at: new Date() };
+    this.reviews.push(r);
+    return { ...r };
+  }
+
+  async listReviewItems(projectId: string, state?: ReviewItem["state"]) {
+    return this.reviews.filter((r) => r.project_id === projectId && (!state || r.state === state)).map((r) => ({ ...r }));
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -243,4 +342,77 @@ export class DrizzleStore implements Store {
   async revokeApiKey(id: string) {
     await this.db.update(apiKeys).set({ revoked_at: new Date() }).where(eq(apiKeys.id, id));
   }
+
+  async createChallenge(c: Omit<Challenge, "version">) {
+    const [row] = await this.db.insert(challenges).values({ ...c, version: 0 }).returning();
+    return toChallenge(row!);
+  }
+
+  async getChallenge(projectId: string, id: string) {
+    const rows = await this.db
+      .select()
+      .from(challenges)
+      .where(and(eq(challenges.project_id, projectId), eq(challenges.id, id)))
+      .limit(1);
+    return rows[0] ? toChallenge(rows[0]) : null;
+  }
+
+  async updateChallenge(id: string, expectedVersion: number, patch: ChallengePatch) {
+    const rows = await this.db
+      .update(challenges)
+      .set({ ...patch, version: expectedVersion + 1, updated_at: new Date() })
+      .where(and(eq(challenges.id, id), eq(challenges.version, expectedVersion)))
+      .returning();
+    return rows[0] ? toChallenge(rows[0]) : null;
+  }
+
+  async listPasskeys(projectId: string, accountRef: string) {
+    const rows = await this.db
+      .select()
+      .from(endUserPasskeys)
+      .where(and(eq(endUserPasskeys.project_id, projectId), eq(endUserPasskeys.account_ref, accountRef)));
+    return rows.map(({ created_at: _c, last_used_at: _l, ...p }) => p);
+  }
+
+  async addPasskey(p: EndUserPasskey) {
+    await this.db.insert(endUserPasskeys).values(p);
+  }
+
+  async updatePasskeyCounter(projectId: string, credentialId: string, counter: number) {
+    await this.db
+      .update(endUserPasskeys)
+      .set({ counter, last_used_at: new Date() })
+      .where(and(eq(endUserPasskeys.project_id, projectId), eq(endUserPasskeys.credential_id, credentialId)));
+  }
+
+  async createReviewItem(item: Omit<ReviewItem, "id" | "state" | "created_at">) {
+    const [row] = await this.db.insert(reviewItems).values({ ...item, id: uuidv7() }).returning();
+    return toReview(row!);
+  }
+
+  async listReviewItems(projectId: string, state?: ReviewItem["state"]) {
+    const rows = await this.db
+      .select()
+      .from(reviewItems)
+      .where(state ? and(eq(reviewItems.project_id, projectId), eq(reviewItems.state, state)) : eq(reviewItems.project_id, projectId))
+      .orderBy(desc(reviewItems.created_at));
+    return rows.map(toReview);
+  }
+}
+
+function toChallenge(row: typeof challenges.$inferSelect): Challenge {
+  const { created_at: _c, updated_at: _u, ...c } = row;
+  return {
+    ...c,
+    event_type: c.event_type as EventType,
+    rung: c.rung as Rung,
+    state: c.state as ChallengeState,
+    secret: (c.secret as Record<string, unknown> | null) ?? null,
+    tried: c.tried as Rung[],
+  };
+}
+
+function toReview(row: typeof reviewItems.$inferSelect): ReviewItem {
+  const { resolved_at: _r, ...r } = row;
+  return { ...r, event_type: r.event_type as EventType, state: r.state as ReviewItem["state"] };
 }

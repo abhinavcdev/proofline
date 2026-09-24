@@ -159,3 +159,67 @@ export const usageDaily = pgTable(
   },
   (t) => [primaryKey({ columns: [t.project_id, t.day, t.event_type, t.action, t.shadow] })],
 );
+
+/** Step-up challenges: a small, mutable state machine (optimistic `version`). */
+export const challenges = pgTable(
+  "challenges",
+  {
+    id: text("id").primaryKey(),
+    project_id: text("project_id").notNull(),
+    decision_id: uuid("decision_id").notNull(),
+    event_type: text("event_type").notNull(),
+    rung: text("rung").notNull(),
+    /** pending | issued | passed | failed | review | expired */
+    state: text("state").notNull(),
+    version: integer("version").notNull().default(0),
+    attempts: integer("attempts").notNull().default(0),
+    sends: integer("sends").notNull().default(0),
+    last_sent_at: timestamp("last_sent_at", { withTimezone: true }),
+    /** sha256(project_id:account.id); only for passkeys. */
+    account_ref: text("account_ref"),
+    /** Needed to send a code. Cleared as soon as the challenge ends. */
+    contact_email: text("contact_email"),
+    /** Rung-specific secrets (OTP hash, WebAuthn challenge). Cleared on terminal states. */
+    secret: jsonb("secret"),
+    /** Rungs already tried, oldest first. */
+    tried: jsonb("tried").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    created_at: createdAt(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("challenges_project_decision_idx").on(t.project_id, t.decision_id)],
+);
+
+/** Passkeys that end users registered through the passkey rung (not dashboard users). */
+export const endUserPasskeys = pgTable(
+  "end_user_passkeys",
+  {
+    project_id: text("project_id").notNull(),
+    credential_id: text("credential_id").notNull(),
+    account_ref: text("account_ref").notNull(),
+    /** COSE public key, base64url. */
+    public_key: text("public_key").notNull(),
+    counter: integer("counter").notNull().default(0),
+    transports: jsonb("transports").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    created_at: createdAt(),
+    last_used_at: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.project_id, t.credential_id] }), index("end_user_passkeys_account_idx").on(t.project_id, t.account_ref)],
+);
+
+/** Manual review queue (the last rung). Worked in the dashboard (M4). */
+export const reviewItems = pgTable(
+  "review_items",
+  {
+    id: uuid("id").primaryKey(),
+    project_id: text("project_id").notNull(),
+    challenge_id: text("challenge_id").notNull(),
+    decision_id: uuid("decision_id").notNull(),
+    event_type: text("event_type").notNull(),
+    /** open | approved | rejected */
+    state: text("state").notNull().default("open"),
+    created_at: createdAt(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => [index("review_items_project_state_idx").on(t.project_id, t.state, t.created_at)],
+);
