@@ -48,6 +48,16 @@ importers:
         specifier: workspace:*
         version: link:../config
 
+  packages/edge:
+    dependencies:
+      '@proofline/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@proofline/config':
+        specifier: workspace:*
+        version: link:../config
+
   packages/questions:
     dependencies:
       zod:
